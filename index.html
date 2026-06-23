@@ -569,7 +569,8 @@
     }
 
     async function updateScore(tid, ri, ci, field, val) {
-      // Update local state immediately for snappy UI
+      // Update local state immediately and capture new rounds in a ref
+      let newRounds;
       setTournaments(prev => prev.map(t => {
         if (t.id !== tid) return t;
         const rounds = t.rounds.map((round, rIdx) =>
@@ -577,21 +578,18 @@
             cIdx !== ci ? court : { ...court, [field]: val }
           )
         );
+        if (t.id === tid) newRounds = rounds;
         return { ...t, rounds };
       }));
 
-      // Debounce the Supabase save by 800ms
+      // Debounce save — use newRounds captured above (not stale state)
       clearTimeout(saveTimers.current[tid]);
+      saveTimers.current[`${tid}_rounds`] = newRounds;
       saveTimers.current[tid] = setTimeout(async () => {
-        const tournament = tournaments.find(t => t.id === tid);
-        if (!tournament) return;
-        const rounds = tournament.rounds.map((round, rIdx) =>
-          rIdx !== ri ? round : round.map((court, cIdx) =>
-            cIdx !== ci ? court : { ...court, [field]: val }
-          )
-        );
+        const roundsToSave = saveTimers.current[`${tid}_rounds`];
+        if (!roundsToSave) return;
         try {
-          const { error } = await sb.from("tournaments").update({ rounds }).eq("id", tid);
+          const { error } = await sb.from("tournaments").update({ rounds: roundsToSave }).eq("id", tid);
           if (error) throw error;
         } catch (e) {
           setError("Kunne ikke gemme score: " + e.message);
