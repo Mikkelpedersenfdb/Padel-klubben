@@ -13,7 +13,7 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       color: #e8f0e9; font-family: 'DM Sans', sans-serif; min-height: 100vh;
-      background-color: #FAF9F6;
+      background-color: #0d2a1a;
       background-image:
         linear-gradient(rgba(255,255,255,0.06) 1px, transparent 1px),
         linear-gradient(90deg, rgba(255,255,255,0.06) 1px, transparent 1px),
@@ -526,6 +526,7 @@
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const saveTimers = useRef({});
+    const pendingEdits = useRef(new Set()); // tournament ids with unsaved local edits
 
     // Load tournaments from Supabase on mount + subscribe to realtime changes
     useEffect(() => {
@@ -544,7 +545,14 @@
       try {
         const { data, error } = await sb.from("tournaments").select("*").order("created_at", { ascending: false });
         if (error) throw error;
-        setTournaments(data.map(row => ({ ...row, players: row.players, rounds: row.rounds })));
+        setTournaments(prev => data.map(row => {
+          // If this tournament has unsaved local edits, keep the local version instead of overwriting
+          if (pendingEdits.current.has(row.id)) {
+            const local = prev.find(t => t.id === row.id);
+            if (local) return local;
+          }
+          return { ...row, players: row.players, rounds: row.rounds };
+        }));
         setError(null);
       } catch (e) {
         setError("Kunne ikke hente data: " + e.message);
@@ -571,6 +579,7 @@
     async function updateScore(tid, ri, ci, field, val) {
       // Update local state immediately and capture new rounds in a ref
       let newRounds;
+      pendingEdits.current.add(tid);
       setTournaments(prev => prev.map(t => {
         if (t.id !== tid) return t;
         const rounds = t.rounds.map((round, rIdx) =>
@@ -578,7 +587,7 @@
             cIdx !== ci ? court : { ...court, [field]: val }
           )
         );
-        if (t.id === tid) newRounds = rounds;
+        newRounds = rounds;
         return { ...t, rounds };
       }));
 
@@ -591,10 +600,11 @@
         try {
           const { error } = await sb.from("tournaments").update({ rounds: roundsToSave }).eq("id", tid);
           if (error) throw error;
+          pendingEdits.current.delete(tid);
         } catch (e) {
           setError("Kunne ikke gemme score: " + e.message);
         }
-      }, 800);
+      }, 600);
     }
 
     async function resetAll() {
