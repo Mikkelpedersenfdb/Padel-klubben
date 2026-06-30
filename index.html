@@ -527,6 +527,9 @@
     const [error, setError] = useState(null);
     const saveTimers = useRef({});
     const pendingEdits = useRef(new Set()); // tournament ids with unsaved local edits
+    const tournamentsRef = useRef([]); // always-current snapshot, avoids stale closures
+
+    useEffect(() => { tournamentsRef.current = tournaments; }, [tournaments]);
 
     // Load tournaments from Supabase on mount + subscribe to realtime changes
     useEffect(() => {
@@ -577,31 +580,32 @@
     }
 
     async function updateScore(tid, ri, ci, field, val) {
-      // Update local state immediately and capture new rounds in a ref
-      let newRounds;
       pendingEdits.current.add(tid);
-      setTournaments(prev => prev.map(t => {
-        if (t.id !== tid) return t;
-        const rounds = t.rounds.map((round, rIdx) =>
-          rIdx !== ri ? round : round.map((court, cIdx) =>
-            cIdx !== ci ? court : { ...court, [field]: val }
-          )
-        );
-        newRounds = rounds;
-        return { ...t, rounds };
-      }));
 
-      // Debounce save — use newRounds captured above (not stale state)
+      // Use tournamentsRef (always current) instead of the closured `tournaments` state
+      const current = tournamentsRef.current.find(t => t.id === tid);
+      if (!current) { console.warn("updateScore: tournament not found", tid); return; }
+      const newRounds = current.rounds.map((round, rIdx) =>
+        rIdx !== ri ? round : round.map((court, cIdx) =>
+          cIdx !== ci ? court : { ...court, [field]: val }
+        )
+      );
+
+      setTournaments(prev => prev.map(t => t.id === tid ? { ...t, rounds: newRounds } : t));
+
       clearTimeout(saveTimers.current[tid]);
       saveTimers.current[`${tid}_rounds`] = newRounds;
       saveTimers.current[tid] = setTimeout(async () => {
         const roundsToSave = saveTimers.current[`${tid}_rounds`];
-        if (!roundsToSave) return;
+        if (!roundsToSave) { console.warn("No rounds to save for", tid); return; }
         try {
-          const { error } = await sb.from("tournaments").update({ rounds: roundsToSave }).eq("id", tid);
+          console.log("Saving rounds to Supabase for tournament", tid, roundsToSave);
+          const { data, error } = await sb.from("tournaments").update({ rounds: roundsToSave }).eq("id", tid).select();
           if (error) throw error;
+          console.log("Saved successfully:", data);
           pendingEdits.current.delete(tid);
         } catch (e) {
+          console.error("Save failed:", e);
           setError("Kunne ikke gemme score: " + e.message);
         }
       }, 600);
